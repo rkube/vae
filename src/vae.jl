@@ -1,5 +1,5 @@
 module vae
 
-greet() = print("Hello World!")
+include("utils.jl")
 
 end # module vae

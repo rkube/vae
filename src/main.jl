@@ -4,19 +4,19 @@ using MLUtils: DataLoader
 using MLDatasets: MNIST
 using CUDA
 using CairoMakie
+using KernelDensity
 
 using vae
 
 # Get some training data
 data_train = MNIST(:train);
-all_X_train, all_Y_train = data_train[:];
+X_train, labels_train = data_train[:];
 # scale to -0.5:0.5 in order to use tanh
 #all_X_train = (all_X_train .- 5f-1) .* 2f0;
-all_X_train = Flux.unsqueeze(all_X_train, dims=3) |> gpu;
+X_train = Flux.unsqueeze(X_train, dims=3) |> gpu;
 
-all_X_test, _ = MNIST(:test)[:];
-#all_X_test = (all_X_test .- 5f-1) .* 2f0;
-all_X_test = Flux.unsqueeze(all_X_test, dims=3) |> gpu;
+X_test, labels_test = MNIST(:test)[:];
+X_test = Flux.unsqueeze(X_test, dims=3) |> gpu;
 
 struct Reshape
     shape
@@ -40,17 +40,18 @@ num_epochs = 10
 # During learning, the weights of the encoder will be adjusted as to yield the
 # optimum paramters ϕ for this mapping.
 encoder_features = Chain(
-    Conv((3, 3), 1=>32, relu; stride=2, ), # 13x13 
-    Conv((3, 3), 32=>64, relu; stride=2), # 6x6
+    Conv((5, 5), 1=>32, relu; stride=1), # 24x24
+    Conv((5, 5), 32=>64, relu; stride=1), # 20x20
+    Conv((5, 5), 64=>64, relu, stride=2), # 8x8
     Flux.flatten,
-    Dense(64 * 6 * 6, 16, relu),
-);
-encoder_μ = Chain(encoder_features, Dense(16, latent_dim)) |> gpu;
+    Dense(64 * 8 * 8, 32, relu),
+) |> gpu;
+encoder_μ = Chain(encoder_features, Dense(32, latent_dim)) |> gpu;
 
 # The encoder network will be tasked to learn the log of the variance.
 # If we would only learn σ², we would have to enforce it to be positive definite.
 # This constraint is removed by asking it to learn the logarithm
-encoder_logvar = Chain(encoder_features, Dense(16, latent_dim)) |> gpu;
+encoder_logvar = Chain(encoder_features, Dense(32, latent_dim)) |> gpu;
 
 
 # The decoder describes the likelihood p(x|z)_θ that maps
@@ -58,19 +59,19 @@ encoder_logvar = Chain(encoder_features, Dense(16, latent_dim)) |> gpu;
 # Or said otherwise: given a hidden representation z, the decoder
 # decodes this into a distribution over the observations x.
 decoder = Chain(
-    Dense(latent_dim, 64 * 7 * 7, relu),
-    Reshape(7, 7, 64, :),
-    ConvTranspose((3, 3), 64=>64, relu, stride=2, pad=SamePad()),
-    ConvTranspose((3, 3), 64=>32, relu, stride=2, pad=SamePad()),
-    ConvTranspose((3, 3), 32 => 1, stride=1, pad=SamePad())
+    Dense(latent_dim, 64 * 9 * 9, relu),
+    Reshape(9, 9, 64, :),
+    ConvTranspose((4, 4), 64=>64, relu, stride=2), # 19x19
+    ConvTranspose((5, 5), 64=>32, relu, stride=1), # 23x23
+    ConvTranspose((5, 5), 32=>1, stride=1)
 ) |> gpu;
 
 # No \sigma
 
 
 # Set up data loaders
-loader_train = DataLoader(all_X_train, batchsize=batch_size, shuffle=true);
-loader_test = DataLoader(all_X_test, batchsize=10, shuffle=true);
+loader_train = DataLoader(X_train, batchsize=batch_size, shuffle=true);
+loader_test = DataLoader(X_test, batchsize=10, shuffle=true);
 length(loader_train)
 
 
@@ -123,9 +124,9 @@ for epoch ∈ 1:num_epochs
             reg = sum(x->sum(x.^2), Flux.params(encoder_μ, encoder_logvar, decoder));
             # We want to maximize the evidence lower bound
             elbo = logp_x_z - β .* kl_q_p;
-            Zygote.ignore() do 
-                @show logp_x_z, kl_q_p, reg
-            end
+            # Zygote.ignore() do 
+            #     @show logp_x_z, kl_q_p, reg
+            # end
             loss = -elbo + γ * reg;
         end
         @show loss
@@ -142,5 +143,9 @@ for epoch ∈ 1:num_epochs
     ax = Axis(f[1, 1], title="epoch $(epoch)")
     contourf!(ax, img_array, colormap=:grays)
     save("vae_epoch$(epoch).png", f)
+
+    f2 = plot_latent_space(encoder_μ, encoder_logvar, X_test, labels_test, epoch)
+    save("vae_latent_epoch$(epoch).png", f2)
+
 end
 

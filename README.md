@@ -1,4 +1,4 @@
-# Variational Autoencoder using Julia's LUXX
+# Variational Autoencoder using Julia's Flux
 
 This package implements a [variational autoencoeder](https://arxiv.org/abs/1312.6114)
  using Julia's [Lux](https://lux.csail.mit.edu/stable/).
